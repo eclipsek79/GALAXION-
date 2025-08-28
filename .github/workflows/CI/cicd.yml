@@ -1,0 +1,102 @@
+name: GALAXION CI/CD
+
+on:
+  push:
+    branches: [ "main", "dev" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  # 1. Smart Contract Tests + Deployment
+  solidity:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: blockchain
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+      - run: npm install
+      - run: npx hardhat test
+      - name: Deploy to Sepolia Testnet
+        env:
+          PRIVATE_KEY: ${{ secrets.DEPLOYER_KEY }}
+          RPC_URL: ${{ secrets.SEPOLIA_RPC }}
+          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
+        run: npx hardhat run scripts/deploy.js --network sepolia
+
+  # 2. Backend Tests + Deployment
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+      - run: npm install
+      - run: npm test
+      - name: Build Docker Image
+        run: docker build -t galaxion/backend .
+      - name: Push to DockerHub
+        run: |
+          echo "${{ secrets.DOCKER_PASS }}" | docker login -u ${{ secrets.DOCKER_USER }} --password-stdin
+          docker tag galaxion/backend galaxion/backend:latest
+          docker push galaxion/backend:latest
+
+  # 3. Unity Build (Windows + Android + WebGL)
+  unity-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Cache Unity
+        uses: actions/cache@v3
+        with:
+          path: Library
+          key: Library-${{ runner.os }}
+      - name: Build Windows
+        uses: game-ci/unity-builder@v2
+        with:
+          unityVersion: 2022.3.0f1
+          targetPlatform: StandaloneWindows64
+          projectPath: unity-client
+      - name: Build Android
+        uses: game-ci/unity-builder@v2
+        with:
+          unityVersion: 2022.3.0f1
+          targetPlatform: Android
+          projectPath: unity-client
+      - name: Build WebGL
+        uses: game-ci/unity-builder@v2
+        with:
+          unityVersion: 2022.3.0f1
+          targetPlatform: WebGL
+          projectPath: unity-client
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: Galaxion-Builds
+          path: build/
+
+  # 4. Deploy WebGL to GitHub Pages
+  deploy-webgl:
+    runs-on: ubuntu-latest
+    needs: unity-build
+    steps:
+      - uses: actions/checkout@v3
+      - name: Download WebGL Build
+        uses: actions/download-artifact@v3
+        with:
+          name: Galaxion-Builds
+          path: build
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: build/WebGL
